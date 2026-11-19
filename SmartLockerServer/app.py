@@ -6,27 +6,26 @@ import requests
 
 app = Flask(__name__)
 
-# قاعدة بيانات مؤقتة في الذاكرة لإدارة الصندوقين بشكل مستقل
+# قاعدة بيانات مؤقتة لإدارة الصندوقين بالوقت الفعلي
 boxes_db = {
     "box_1": {"otp": None, "expires_at": 0, "phone": None},
     "box_2": {"otp": None, "expires_at": 0, "phone": None}
 }
 
-# قراءة المفاتيح السرية من Environment Variables في Render بأمان
 WHATSAPP_API_URL = os.environ.get("WHATSAPP_API_URL", "")
 WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN", "")
 ESP_API_KEY = os.environ.get("ESP_API_KEY", "")
 
-def send_whatsapp_message(phone, box_name, otp, hours):
+def send_whatsapp_message(phone, box_name, otp, duration_label):
     if not WHATSAPP_API_URL or not WHATSAPP_TOKEN or not phone:
-        print(f"[WhatsApp Simulation] To: {phone} | Box: {box_name} | OTP: {otp} | Hours: {hours}")
+        print(f"[WhatsApp Simulation] To: {phone} | Box: {box_name} | OTP: {otp} | Duration: {duration_label}")
         return False
     
     message = (
         f"أهلاً بك في نظام الصناديق الذكية 📦\n"
         f"تم تأكيد حجزك بنجاح!\n"
         f"• الصندوق: {box_name}\n"
-        f"• مدة الإيجار: {hours} ساعة\n"
+        f"• مدة الإيجار: {duration_label}\n"
         f"• رمز الفتح السري (OTP): *{otp}*\n"
         f"يرجى إدخال الرمز في لوحة الصندوق للفتح."
     )
@@ -55,10 +54,7 @@ STORE_HTML = """
         :root {
             --bg-color: #0f172a;
             --card-bg: #1e293b;
-            --surface: #334155;
             --primary: #3b82f6;
-            --primary-hover: #2563eb;
-            --accent: #10b981;
             --text-main: #f8fafc;
             --text-muted: #94a3b8;
             --border: #334155;
@@ -76,7 +72,7 @@ STORE_HTML = """
         }
         .app-card {
             width: 100%;
-            max-width: 480px;
+            max-width: 500px;
             background: var(--card-bg);
             border: 1px solid rgba(255,255,255,0.08);
             border-radius: 24px;
@@ -94,64 +90,60 @@ STORE_HTML = """
             font-weight: 700;
             margin-bottom: 8px;
         }
-        .header h1 { margin: 0; font-size: 24px; font-weight: 800; letter-spacing: -0.5px; }
+        .header h1 { margin: 0; font-size: 24px; font-weight: 800; }
         .header p { margin: 6px 0 0; color: var(--text-muted); font-size: 14px; }
-
         .section-title { font-size: 14px; font-weight: 700; color: #cbd5e1; margin: 18px 0 10px; }
 
-        /* بطاقات اختيار الصندوق */
         .lockers-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
         .locker-option {
             background: rgba(15, 23, 42, 0.6);
             border: 2px solid var(--border);
             border-radius: 16px;
-            padding: 16px 12px;
+            padding: 16px 10px;
             text-align: center;
             cursor: pointer;
             transition: all 0.25s ease;
-            position: relative;
         }
-        .locker-option:hover { border-color: #475569; transform: translateY(-2px); }
+        .locker-option:hover:not(.locked) { border-color: #475569; transform: translateY(-2px); }
         .locker-option.active {
             border-color: var(--primary);
             background: rgba(59, 130, 246, 0.12);
             box-shadow: 0 0 20px rgba(59, 130, 246, 0.2);
         }
+        .locker-option.locked {
+            opacity: 0.75;
+            border-color: rgba(239, 68, 68, 0.4);
+            background: rgba(239, 68, 68, 0.06);
+        }
         .locker-icon { font-size: 28px; margin-bottom: 6px; display: block; }
         .locker-name { font-weight: 700; font-size: 15px; display: block; }
         .locker-status {
             font-size: 11px;
-            padding: 2px 8px;
+            padding: 3px 10px;
             border-radius: 6px;
             display: inline-block;
             margin-top: 6px;
-            font-weight: 600;
+            font-weight: 700;
         }
         .status-free { background: rgba(16, 185, 129, 0.15); color: #34d399; }
-        .status-busy { background: rgba(245, 158, 11, 0.15); color: #fbbf24; }
+        .status-busy { background: rgba(239, 68, 68, 0.18); color: #f87171; }
+        .timer-text { display: block; font-size: 11px; color: #fbbf24; margin-top: 4px; font-weight: 600; direction: ltr; }
 
-        /* أزرار المدة */
-        .duration-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+        .duration-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
         .dur-btn {
             background: rgba(15, 23, 42, 0.6);
             border: 1.5px solid var(--border);
             color: var(--text-main);
             border-radius: 12px;
-            padding: 10px 4px;
+            padding: 10px 2px;
             cursor: pointer;
             text-align: center;
             transition: all 0.2s;
         }
-        .dur-btn.active {
-            border-color: var(--primary);
-            background: var(--primary);
-            color: white;
-        }
-        .dur-time { font-weight: 700; font-size: 13px; display: block; }
-        .dur-price { font-size: 11px; opacity: 0.85; }
+        .dur-btn.active { border-color: var(--primary); background: var(--primary); color: white; }
+        .dur-time { font-weight: 700; font-size: 12px; display: block; }
+        .dur-price { font-size: 10px; opacity: 0.85; }
 
-        /* حقل الجوال */
-        .input-group { position: relative; }
         .input-group input {
             width: 100%;
             background: rgba(15, 23, 42, 0.8);
@@ -161,13 +153,11 @@ STORE_HTML = """
             border-radius: 14px;
             font-size: 15px;
             outline: none;
-            transition: border-color 0.2s;
             direction: ltr;
             text-align: left;
         }
         .input-group input:focus { border-color: var(--primary); }
 
-        /* زر الدفع */
         .pay-btn {
             width: 100%;
             background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
@@ -180,12 +170,11 @@ STORE_HTML = """
             cursor: pointer;
             margin-top: 22px;
             box-shadow: 0 10px 20px -5px rgba(37, 99, 235, 0.4);
-            transition: transform 0.2s, box-shadow 0.2s;
+            transition: all 0.2s;
         }
-        .pay-btn:hover { transform: translateY(-2px); box-shadow: 0 14px 24px -5px rgba(37, 99, 235, 0.5); }
-        .pay-btn:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
+        .pay-btn:hover:not(:disabled) { transform: translateY(-2px); }
+        .pay-btn:disabled { background: #475569; box-shadow: none; cursor: not-allowed; opacity: 0.7; }
 
-        /* بطاقة النتيجة والتذكرة */
         .ticket {
             margin-top: 24px;
             background: linear-gradient(145deg, rgba(16, 185, 129, 0.15), rgba(6, 95, 70, 0.25));
@@ -194,10 +183,8 @@ STORE_HTML = """
             padding: 20px;
             text-align: center;
             display: none;
-            animation: fadeIn 0.4s ease;
         }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-        .ticket-title { color: #34d399; font-weight: 700; font-size: 15px; margin-bottom: 6px; }
+        .ticket-title { color: #34d399; font-weight: 700; font-size: 15px; }
         .otp-box {
             background: rgba(15, 23, 42, 0.8);
             border-radius: 12px;
@@ -228,38 +215,44 @@ STORE_HTML = """
         <div class="header">
             <span class="badge">IoT Smart Delivery & Storage</span>
             <h1>📦 الخزائن الذكية</h1>
-            <p>احجز خزنتك إلكترونياً واستلم رمز الفتح الفوري</p>
+            <p>نظام حجز فوري بالوقت الفعلي</p>
         </div>
 
         <div class="section-title">1. اختر الخزنة المطلوبة:</div>
         <div class="lockers-grid">
             <div class="locker-option active" id="card_box_1" onclick="selectBox('box_1')">
-                <span class="locker-icon">🔐</span>
+                <span class="locker-icon" id="icon_box_1">🔓</span>
                 <span class="locker-name">الخزنة الأولى (Box 1)</span>
                 <span class="locker-status status-free" id="status_box_1">● متاح للحجز</span>
+                <span class="timer-text" id="timer_box_1"></span>
             </div>
             <div class="locker-option" id="card_box_2" onclick="selectBox('box_2')">
-                <span class="locker-icon">🔐</span>
+                <span class="locker-icon" id="icon_box_2">🔓</span>
                 <span class="locker-name">الخزنة الثانية (Box 2)</span>
                 <span class="locker-status status-free" id="status_box_2">● متاح للحجز</span>
+                <span class="timer-text" id="timer_box_2"></span>
             </div>
         </div>
 
         <div class="section-title">2. حدد مدة الإيجار:</div>
         <div class="duration-grid">
-            <div class="dur-btn active" onclick="selectDuration(this, 1, 10)">
+            <div class="dur-btn active" onclick="selectDuration(this, 5, 2, '5 دقائق')">
+                <span class="dur-time">5 دقائق</span>
+                <span class="dur-price">2 ر.س</span>
+            </div>
+            <div class="dur-btn" onclick="selectDuration(this, 60, 10, 'ساعة واحدة')">
                 <span class="dur-time">1 ساعة</span>
                 <span class="dur-price">10 ر.س</span>
             </div>
-            <div class="dur-btn" onclick="selectDuration(this, 2, 18)">
+            <div class="dur-btn" onclick="selectDuration(this, 120, 18, 'ساعتان')">
                 <span class="dur-time">2 ساعة</span>
                 <span class="dur-price">18 ر.س</span>
             </div>
-            <div class="dur-btn" onclick="selectDuration(this, 5, 40)">
+            <div class="dur-btn" onclick="selectDuration(this, 300, 40, '5 ساعات')">
                 <span class="dur-time">5 ساعات</span>
                 <span class="dur-price">40 ر.س</span>
             </div>
-            <div class="dur-btn" onclick="selectDuration(this, 24, 80)">
+            <div class="dur-btn" onclick="selectDuration(this, 1440, 80, '24 ساعة')">
                 <span class="dur-time">24 ساعة</span>
                 <span class="dur-price">80 ر.س</span>
             </div>
@@ -271,7 +264,7 @@ STORE_HTML = """
         </div>
 
         <button class="pay-btn" id="submitBtn" onclick="rentBox()">
-            💳 تأكيد ودفع (10 ر.س)
+            💳 تأكيد ودفع (2 ر.س)
         </button>
 
         <div class="ticket" id="resultBox">
@@ -284,25 +277,102 @@ STORE_HTML = """
 
     <script>
         let selectedBox = 'box_1';
-        let selectedHours = 1;
-        let selectedPrice = 10;
+        let selectedMinutes = 5;
+        let selectedPrice = 2;
+        let selectedLabel = '5 دقائق';
         let currentGeneratedOtp = '';
+        let boxesState = {
+            box_1: { active: false, remaining_seconds: 0 },
+            box_2: { active: false, remaining_seconds: 0 }
+        };
 
         function selectBox(boxId) {
             selectedBox = boxId;
             document.querySelectorAll('.locker-option').forEach(el => el.classList.remove('active'));
             document.getElementById('card_' + boxId).classList.add('active');
+            updatePayButton();
         }
 
-        function selectDuration(btn, hours, price) {
-            selectedHours = hours;
+        function selectDuration(btn, minutes, price, label) {
+            selectedMinutes = minutes;
             selectedPrice = price;
+            selectedLabel = label;
             document.querySelectorAll('.dur-btn').forEach(el => el.classList.remove('active'));
             btn.classList.add('active');
-            document.getElementById('submitBtn').innerText = `💳 تأكيد ودفع (${price} ر.س)`;
+            updatePayButton();
         }
 
+        function updatePayButton() {
+            const btn = document.getElementById('submitBtn');
+            if (boxesState[selectedBox].active) {
+                btn.disabled = true;
+                btn.innerText = "🔒 هذه الخزنة محجوزة حالياً";
+            } else {
+                btn.disabled = false;
+                btn.innerText = `💳 تأكيد ودفع (${selectedPrice} ر.س)`;
+            }
+        }
+
+        function formatSeconds(sec) {
+            if (sec <= 0) return "";
+            const h = Math.floor(sec / 3600);
+            const m = Math.floor((sec % 3600) / 60);
+            const s = Math.floor(sec % 60);
+            if (h > 0) return `⏳ ${h}h ${m}m ${s}s`;
+            return `⏳ ${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+        }
+
+        function renderBoxesUI() {
+            ['box_1', 'box_2'].forEach(id => {
+                const state = boxesState[id];
+                const card = document.getElementById('card_' + id);
+                const icon = document.getElementById('icon_' + id);
+                const status = document.getElementById('status_' + id);
+                const timer = document.getElementById('timer_' + id);
+
+                if (state.active && state.remaining_seconds > 0) {
+                    card.classList.add('locked');
+                    icon.innerText = '🔒';
+                    status.className = 'locker-status status-busy';
+                    status.innerText = '● محجوز حالياً';
+                    timer.innerText = formatSeconds(state.remaining_seconds);
+                } else {
+                    state.active = false;
+                    card.classList.remove('locked');
+                    icon.innerText = '🔓';
+                    status.className = 'locker-status status-free';
+                    status.innerText = '● متاح للحجز';
+                    timer.innerText = '';
+                }
+            });
+            updatePayButton();
+        }
+
+        async function fetchStatus() {
+            try {
+                const res = await fetch('/api/status');
+                const data = await res.json();
+                boxesState = data;
+                renderBoxesUI();
+            } catch (e) {}
+        }
+
+        // تحديث العداد كل ثانية محلياً ومزامنته مع السيرفر كل 10 ثوانٍ
+        setInterval(() => {
+            ['box_1', 'box_2'].forEach(id => {
+                if (boxesState[id].active && boxesState[id].remaining_seconds > 0) {
+                    boxesState[id].remaining_seconds -= 1;
+                }
+            });
+            renderBoxesUI();
+        }, 1000);
+
+        setInterval(fetchStatus, 10000);
+        fetchStatus();
+
         async function rentBox() {
+            if (boxesState[selectedBox].active) return;
+
             const phone = document.getElementById('phone').value.trim();
             const btn = document.getElementById('submitBtn');
 
@@ -312,13 +382,18 @@ STORE_HTML = """
             }
 
             btn.disabled = true;
-            btn.innerText = "⏳ جاري معالجة الطلب وتوليد الرمز...";
+            btn.innerText = "⏳ جاري تفعيل الحجز...";
 
             try {
                 const res = await fetch('/api/generate-otp', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ box_id: selectedBox, hours: selectedHours, phone: phone })
+                    body: JSON.stringify({
+                        box_id: selectedBox,
+                        minutes: selectedMinutes,
+                        duration_label: selectedLabel,
+                        phone: phone
+                    })
                 });
 
                 const data = await res.json();
@@ -329,19 +404,16 @@ STORE_HTML = """
                     
                     const boxArabic = selectedBox === 'box_1' ? 'الخزنة الأولى (Box 1)' : 'الخزنة الثانية (Box 2)';
                     document.getElementById('infoDisplay').innerHTML = 
-                        `تم تخصيص <b>${boxArabic}</b> لمدة <b>${selectedHours} ساعة</b><br>أدخل الرمز أعلاه في لوحة المفاتيح لفتح القفل`;
+                        `تم تخصيص <b>${boxArabic}</b> لمدة <b>${selectedLabel}</b><br>أدخل الرمز في لوحة المفاتيح قبل انتهاء العداد`;
 
-                    const statusBadge = document.getElementById('status_' + selectedBox);
-                    statusBadge.className = 'locker-status status-busy';
-                    statusBadge.innerText = '● نشط حالياً';
+                    await fetchStatus();
                 } else {
-                    alert("حدث خطأ: " + data.message);
+                    alert(data.message);
+                    await fetchStatus();
                 }
             } catch (err) {
-                alert("تعذر الاتصال بالسيرفر، تأكد من الإنترنت.");
-            } finally {
-                btn.disabled = false;
-                btn.innerText = `💳 تأكيد ودفع (${selectedPrice} ر.س)`;
+                alert("تعذر الاتصال بالسيرفر.");
+                updatePayButton();
             }
         }
 
@@ -359,18 +431,38 @@ STORE_HTML = """
 def home():
     return render_template_string(STORE_HTML)
 
+# مسار جديد لإرجاع الحالة الحقيقية للصندوقين والوقت المتبقي
+@app.route('/api/status', methods=['GET'])
+def get_status():
+    now = time.time()
+    status_data = {}
+    for box_id, info in boxes_db.items():
+        remaining = max(0, int(info["expires_at"] - now))
+        is_active = bool(info["otp"] and remaining > 0)
+        status_data[box_id] = {
+            "active": is_active,
+            "remaining_seconds": remaining
+        }
+    return jsonify(status_data), 200
+
 @app.route('/api/generate-otp', methods=['POST'])
 def generate_otp():
     data = request.get_json(silent=True) or {}
     box_id = data.get('box_id', 'box_1')
-    hours = float(data.get('hours', 1))
+    minutes = float(data.get('minutes', 5))
+    duration_label = data.get('duration_label', f'{int(minutes)} دقيقة')
     phone = data.get('phone', '')
 
     if box_id not in boxes_db:
         return jsonify({"status": "error", "message": "Invalid box_id"}), 400
 
+    now = time.time()
+    # منع الحجز المزدوج إذا كانت الخزنة لا تزال نشطة
+    if boxes_db[box_id]["otp"] and now < boxes_db[box_id]["expires_at"]:
+        return jsonify({"status": "error", "message": "عذراً، هذه الخزنة محجوزة حالياً ولم ينتهِ وقتها بعد!"}), 409
+
     new_otp = str(random.randint(1000, 9999))
-    expiry_timestamp = time.time() + (hours * 3600)
+    expiry_timestamp = now + (minutes * 60)
 
     boxes_db[box_id] = {
         "otp": new_otp,
@@ -379,14 +471,14 @@ def generate_otp():
     }
 
     box_label = "الصندوق الأول (Box 1)" if box_id == "box_1" else "الصندوق الثاني (Box 2)"
-    send_whatsapp_message(phone, box_label, new_otp, hours)
+    send_whatsapp_message(phone, box_label, new_otp, duration_label)
 
-    print(f"[{box_id}] New OTP: {new_otp} | Valid for: {hours}h")
+    print(f"[{box_id}] New OTP: {new_otp} | Valid for: {minutes} mins")
     return jsonify({
         "status": "success",
         "box_id": box_id,
         "otp": new_otp,
-        "expires_in_hours": hours
+        "expires_in_minutes": minutes
     }), 200
 
 @app.route('/api/verify', methods=['POST'])

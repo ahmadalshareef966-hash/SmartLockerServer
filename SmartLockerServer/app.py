@@ -334,4 +334,30 @@ def verify_otp():
         return jsonify({"success": False, "valid": False, "message": "Unknown Box"}), 400
 
     if not otp:
-        return jsonify({"success": False, "valid": False, "message": "
+        return jsonify({"success": False, "valid": False, "message": "OTP required"}), 400
+
+    record = boxes_db[box_id]
+    if not record.get("otp") or record["otp"] != otp:
+        return jsonify({"success": False, "valid": False, "message": "Invalid OTP"}), 401
+
+    if time.time() > record.get("expires_at", 0):
+        boxes_db[box_id]["otp"] = None
+        return jsonify({"success": False, "valid": False, "message": "OTP Expired"}), 401
+
+    unlock_seconds = int(record.get("unlock_seconds", 5))
+    boxes_db[box_id]["otp"] = None
+    boxes_db[box_id]["expires_at"] = 0
+
+    return jsonify({
+        "success": True,
+        "valid": True,
+        "box_id": box_id,
+        "duration_sec": unlock_seconds,
+        "unlock_duration": unlock_seconds,
+        "message": "Access Granted"
+    }), 200
+
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)

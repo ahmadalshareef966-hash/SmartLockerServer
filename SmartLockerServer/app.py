@@ -1,23 +1,68 @@
+import os
 import time
 import random
+import requests
 from flask import Flask, request, jsonify
 
-# (تأكد من وجود app و boxes_db و send_whatsapp_message و متغيرات البيئة في ملفك)
-# مثال على شكل العنصر في boxes_db:
-# "box_1": {"otp": None, "expires_at": 0, "phone": None, "unlock_seconds": 5}
+app = Flask(__name__)
+
+# قاعدة بيانات مؤقتة لإدارة الصندوقين بالوقت الفعلي
+boxes_db = {
+    "box_1": {"otp": None, "expires_at": 0, "phone": None, "unlock_seconds": 5},
+    "box_2": {"otp": None, "expires_at": 0, "phone": None, "unlock_seconds": 5},
+}
+
+# قراءة المفاتيح السرية من Environment Variables في Render
+WHATSAPP_API_URL = os.environ.get("WHATSAPP_API_URL", "")
+WHATSAPP_TOKEN = os.environ.get("WHATSAPP_TOKEN", "")
+ESP_API_KEY = os.environ.get("ESP_API_KEY", "")
+
+
+def send_whatsapp_message(phone, box_name, otp, duration_label):
+    if not WHATSAPP_API_URL or not WHATSAPP_TOKEN or not phone:
+        print(f"[Whatsapp Simulation] To: {phone} | Box: {box_name} | OTP: {otp} | Duration: {duration_label}")
+        return False
+
+    message = (
+        "أهلاً بك في نظام الصناديق الذكية\n"
+        "تم تأكيد حجزك بنجاح!\n"
+        f"الصندوق: {box_name}\n"
+        f"رمز الدخول (OTP): {otp}\n"
+        f"المدة: {duration_label}"
+    )
+
+    try:
+        headers = {
+            "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "phone": phone,
+            "message": message,
+        }
+        resp = requests.post(WHATSAPP_API_URL, json=payload, headers=headers, timeout=10)
+        return resp.status_code in (200, 201)
+    except Exception as e:
+        print(f"[Whatsapp Error] {e}")
+        return False
+
 
 def normalize_box_id(raw_box):
     if not raw_box:
         return None
     cleaned = str(raw_box).strip().lower().replace("-", "_").replace(" ", "_")
     mapping = {
-        "box_1": "box_1", "box1": "box_1", "1": "box_1",
-        "box_2": "box_2", "box2": "box_2", "2": "box_2",
+        "box_1": "box_1",
+        "box1": "box_1",
+        "1": "box_1",
+        "box_2": "box_2",
+        "box2": "box_2",
+        "2": "box_2",
     }
     return mapping.get(cleaned)
 
+
 def compute_unlock_seconds(data):
-    # يدعم إرسال المدة بالثواني أو بالدقائق أو بالساعات أو نص duration_label
     for key in ["duration_sec", "unlock_duration", "duration", "seconds"]:
         if key in data and data[key] is not None:
             try:
@@ -39,12 +84,20 @@ def compute_unlock_seconds(data):
         try:
             hrs = float(data["hours"])
             if hrs > 0:
-                # للعرض التجريبي نحول الساعة إلى ثواني آمنة (مثلاً 10 ثوانٍ) أو اضرب في 3600 حسب حاجتك
                 return max(5, min(60, int(hrs * 10)))
         except (ValueError, TypeError):
             pass
 
-    return 5  # الافتراضي 5 ثوانٍ
+    return 5
+
+
+@app.route("/", methods=["GET"])
+def home():
+    return jsonify({
+        "status": "online",
+        "boxes": list(boxes_db.keys()),
+    }), 200
+
 
 @app.route("/api/generate-otp", methods=["POST"])
 def generate_otp():
@@ -79,11 +132,11 @@ def generate_otp():
         "message": f"OTP generated for {box_id}"
     }), 200
 
+
 @app.route("/api/verify-otp", methods=["POST"])
 def verify_otp():
     data = request.get_json(silent=True) or {}
 
-    # تحقق اختياري من ESP_API_KEY إذا كان مضبوطاً في Render ومُرسلاً من ESP32
     incoming_key = (
         request.headers.get("X-API-Key")
         or request.headers.get("Authorization", "").replace("Bearer ", "").strip()
@@ -111,7 +164,6 @@ def verify_otp():
         return jsonify({"success": False, "valid": False, "message": "OTP Expired"}), 401
 
     unlock_seconds = int(record.get("unlock_seconds", 5))
-    # تفريغ الكود بعد الاستخدام لمرة واحدة
     boxes_db[box_id]["otp"] = None
     boxes_db[box_id]["expires_at"] = 0
 
@@ -123,3 +175,8 @@ def verify_otp():
         "unlock_duration": unlock_seconds,
         "message": "Access Granted"
     }), 200
+
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
